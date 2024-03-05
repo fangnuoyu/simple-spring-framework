@@ -2,6 +2,8 @@ package com.hrt.example.service;
 
 import com.hrt.example.annotation.Component;
 import com.hrt.example.annotation.Scope;
+import com.hrt.example.core.BeanNameAware;
+import com.hrt.example.core.InitializingBean;
 
 /**
  * @Name UserServiceImpl
@@ -12,9 +14,20 @@ import com.hrt.example.annotation.Scope;
  **/
 @Component("userServiceImpl")
 @Scope("singleton")
-public class UserServiceImpl {
+public class UserServiceImpl implements UserService, BeanNameAware, InitializingBean {
 
     public void test() {
-        System.out.println("UserServiceImpl");
+        System.out.println("UserServiceImpl执行测试方法()");
     }
+
+    @Override
+    public void setBeanName(String beanName) {
+        System.out.println("UserServiceImpl.Aware回调: " + beanName);
+    }
+
+    @Override
+    public void afterPropertiesSet() {
+        System.out.println("初始化Bean");
+    }
+
 }

@@ -1,13 +1,17 @@
 package com.hrt.example.core;
 
+import com.hrt.example.annotation.Autowired;
 import com.hrt.example.annotation.Component;
 import com.hrt.example.annotation.ComponentScan;
 import com.hrt.example.annotation.Scope;
 import com.hrt.example.utils.FileUtil;
+import org.apache.commons.lang3.StringUtils;
 
+import java.beans.Introspector;
 import java.io.File;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-import java.net.URL;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -25,48 +29,57 @@ public class SimpleApplicationContext {
     private ConcurrentHashMap<String, BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>();
 
     private ConcurrentHashMap<String, Object> singletonObjects = new ConcurrentHashMap<>();
+    
+    private List<BeanPostProcessor> beanPostProcessorList = new ArrayList<>();
 
     public SimpleApplicationContext(Class configClass) {
         this.configClass = configClass;
 
         // 扫描--->BeanDefinition--->beanDefinitionMap
         if(configClass.isAnnotationPresent(ComponentScan.class)) {
-            ComponentScan componentScanAnnotation = (ComponentScan) configClass.getAnnotation(ComponentScan.class);
-            String packageName = componentScanAnnotation.value();
-            System.out.println("包名: " + packageName);
+            try {
+                ComponentScan componentScanAnnotation = (ComponentScan) configClass.getAnnotation(ComponentScan.class);
+                // 包名 com.hrt.example
+                String packageName = componentScanAnnotation.value();
+                // 相对路径 com/hrt/example
+                String relativePath  = packageName.replace(".", "/");
+                ClassLoader classLoader = this.getClass().getClassLoader();
+                File file = new File(classLoader.getResource(relativePath).getFile());
+                // 递归遍历目录 ---> 获取com/hrt/example所有绝对路径
+                List<String> fileAbsolutePathList = FileUtil.traverseDirectory(file);
+                for (String fileAbsolutePath : fileAbsolutePathList) {
+                    if(!fileAbsolutePath.endsWith(".class")) {
+                        continue;
+                    }
+                    // 全限定类名 eg:
+                    //      com.hrt.example.annotation.Component
+                    //      com.hrt.example.annotation.ComponentScan
+                    String fullClassName = fileAbsolutePath
+                            .substring(fileAbsolutePath.indexOf("classes\\") + "classes\\".length())
+                            .replace("\\", ".")
+                            .replace(".class", "");
+                    Class<?> clazz = classLoader.loadClass(fullClassName);
+                    if(clazz.isAnnotationPresent(Component.class)) {
+                        if(BeanPostProcessor.class.isAssignableFrom(clazz)) {
+                            BeanPostProcessor beanPostProcessor = (BeanPostProcessor)clazz.newInstance();
+                            beanPostProcessorList.add(beanPostProcessor);
+                        }
 
-            String relativePath  = packageName.replace(".", "/");
-            ClassLoader classLoader = this.getClass().getClassLoader();
-            URL url = classLoader.getResource(relativePath);
-            System.out.println("路径URL: " + url.getFile());
-            File file = new File(url.getFile());
-            List<String> fileAbsolutePathList = FileUtil.traverseDirectory(file);
-            for (String fileAbsolutePath : fileAbsolutePathList) {
-//                System.out.println("绝对路径: " + fileAbsolutePath);
-                if(!fileAbsolutePath.endsWith(".class")) {
-                    continue;
-                }
-                String fullClassName = fileAbsolutePath
-                        .substring(fileAbsolutePath.indexOf("classes\\") + "classes\\".length())
-                        .replace("\\", ".")
-                        .replace(".class", "");
-                Class<?> clazz = null;
-                try {
-                    System.out.println("全限定类名: " + fullClassName);
-                    clazz = classLoader.loadClass(fullClassName);
-                } catch (ClassNotFoundException e) {
-                    throw new RuntimeException(e);
-                }
-                if(clazz.isAnnotationPresent(Component.class)) {
-                    String beanName = clazz.getAnnotation(Component.class).value();
+                        String beanName = clazz.getAnnotation(Component.class).value();
+                        if(StringUtils.isBlank(beanName)) {
+                            beanName = Introspector.decapitalize(clazz.getSimpleName());
+                        }
 
-                    BeanDefinition beanDefinition = new BeanDefinition();
-                    beanDefinition.setType(clazz);
-                    beanDefinition.setScope(clazz.isAnnotationPresent(Scope.class) ?
-                            ((Scope)clazz.getAnnotation(Scope.class)).value() : "singleton");
+                        BeanDefinition beanDefinition = new BeanDefinition();
+                        beanDefinition.setType(clazz);
+                        beanDefinition.setScope(clazz.isAnnotationPresent(Scope.class) ?
+                                ((Scope)clazz.getAnnotation(Scope.class)).value() : "singleton");
 
-                    beanDefinitionMap.put(beanName, beanDefinition);
+                        beanDefinitionMap.put(beanName, beanDefinition);
+                    }
                 }
+            }catch (Exception e) {
+                throw new RuntimeException(e);
             }
         }
         // 实例化单例Bean
@@ -83,6 +96,30 @@ public class SimpleApplicationContext {
         Class clazz = beanDefinition.getType();
         try {
             Object instance = clazz.getConstructor().newInstance();
+            // 依赖注入
+            for (Field f : clazz.getDeclaredFields()) {
+                if(f.isAnnotationPresent(Autowired.class)) {
+                    f.setAccessible(true);
+                    f.set(instance, getBean(f.getName()));
+                }
+            }
+            // Aware回调
+            if(instance instanceof BeanNameAware) {
+                ((BeanNameAware)instance).setBeanName(beanName);
+            }
+            // 初始化前
+            for (BeanPostProcessor beanPostProcessor : beanPostProcessorList) {
+                instance = beanPostProcessor.postProcessBeforeInitialization(beanName, instance);
+            }
+            // 初始化
+            if(instance instanceof InitializingBean) {
+                ((InitializingBean)instance).afterPropertiesSet();
+            }
+            // 初始化后
+            for (BeanPostProcessor beanPostProcessor : beanPostProcessorList) {
+                instance = beanPostProcessor.postProcessAfterInitialization(beanName, instance);
+            }
+
             return instance;
         } catch (InstantiationException
                  | IllegalAccessException
