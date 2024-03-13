@@ -27,8 +27,12 @@ public class SimpleApplicationContext {
     private Class configClass;
 
     private ConcurrentHashMap<String, BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>();
-
+    // 一级缓存(单例池Map)
     private ConcurrentHashMap<String, Object> singletonObjects = new ConcurrentHashMap<>();
+    // 二级缓存(用于保存出现循环依赖时会提前产生没有经过完整bean生命周期的单例对象)
+    private ConcurrentHashMap<String, Object> earlySingletonObjects = new ConcurrentHashMap<>();
+    // 三级缓存(打破循环依赖)
+    private ConcurrentHashMap<String, Object> singletonFactories = new ConcurrentHashMap<>();
     
     private List<BeanPostProcessor> beanPostProcessorList = new ArrayList<>();
 
